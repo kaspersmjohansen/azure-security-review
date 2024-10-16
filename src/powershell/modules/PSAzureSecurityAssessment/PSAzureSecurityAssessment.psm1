@@ -1721,7 +1721,7 @@ Entra ID should export diagnostic logs to a Log Analytics workspace. This is a b
     # Set the headers for the API call
     $headers = @{
         "Authorization" = "Bearer $(ConvertFrom-SecureString $accessToken -AsPlainText)"
-        "Content-Type" = "application/json"
+        "Content-Type"  = "application/json"
     }
 
     try {
@@ -1736,10 +1736,10 @@ Entra ID should export diagnostic logs to a Log Analytics workspace. This is a b
         $properties = ($diagnosticSetting | Select-Object -Property name, properties).properties
         $logs = $properties.logs
         $Output = [PSCustomObject][Ordered]@{
-            "Diagnostics settings name"         = $diagnosticSetting.name
-            "Exporting to workspace" = $null -ne $properties.workspaceId
-            "Exporting audit logs" = $logs | Where-Object { $_.category -eq 'AuditLogs' } | Select-Object -ExpandProperty enabled
-            "Exporting Signin logs" = $logs | Where-Object { $_.category -eq 'SignInLogs' } | Select-Object -ExpandProperty enabled
+            "Diagnostics settings name" = $diagnosticSetting.name
+            "Exporting to workspace"    = $null -ne $properties.workspaceId
+            "Exporting audit logs"      = $logs | Where-Object { $_.category -eq 'AuditLogs' } | Select-Object -ExpandProperty enabled
+            "Exporting Signin logs"     = $logs | Where-Object { $_.category -eq 'SignInLogs' } | Select-Object -ExpandProperty enabled
         }
 
         if ($OutputMarkdown) { $Output | ConvertTo-Markdown } else { $Output | Format-Table -AutoSize }
@@ -2100,15 +2100,17 @@ $((Test-EntraIdDiagnosticSetting -OutputMarkdown) -join "`n")
 "@
     #endregion
 
-    $FileName = "entra-id-$TenantId.md"
-    $FilePath = "$OutputFolder\$FileName"
+    $TimeStamp = Get-Date -Format "yyyy-MM-dd-HH-mm-ss"
+    $FileName = "entra-id-assessment-$TenantId-$TimeStamp"
+    $FilePath = "$OutputFolder\$FileName.md"
     $Markdown | Out-File -FilePath $FilePath
     Write-Verbose "Saved to $FilePath"
 
     # upload to Azure Blob Storage
     if ($null -ne $StorageAccountName -and $null -ne $StorageAccountTenantId) {
-        # Blob name is the same as the file name
-        $BlobName = $FileName
+        # Blob name is the same as the file name but with a folder structure
+        $TimeStamp = Get-Date -Format "yyyy-MM-dd"
+        $BlobName = "$TimeStamp\$FileName.md"
         Write-Verbose "Uploading to Azure Blob Storage: $StorageAccountName/$ContainerName/$BlobName"
         # switch to the storage account tenant
         $null = Set-AzContext -TenantId $StorageAccountTenantId
@@ -2122,6 +2124,24 @@ $((Test-EntraIdDiagnosticSetting -OutputMarkdown) -join "`n")
         # upload file
         $null = Set-AzStorageBlobContent -Container $ContainerName -File $FilePath -Blob $BlobName -Context $StorageContext -Force -ErrorAction Stop
         Write-Verbose "Uploaded to Azure Blob Storage!"
+
+        if ($ConvertToPdf.IsPresent) {
+            Write-Verbose "Converting to PDF"
+            try {
+                $null = docker ps
+                $WorkingDirectory = (Resolve-Path $OutputFolder).Path
+                # convert to pdf using pandoc
+                docker run --rm --volume "$($WorkingDirectory):$($WorkingDirectory)" -w "$($WorkingDirectory)" pandoc/latex "$FileName.md" -o "$FileName.pdf" -V geometry:margin=2cm -V mainfont="DejaVu Serif" -V monofont="DejaVu Sans Mono"
+                # upload pdf
+                $FilePath = "$OutputFolder\$FileName.pdf"
+                $BlobName = "$TimeStamp\$FileName.pdf"
+                $null = Set-AzStorageBlobContent -Container $ContainerName -File $FilePath -Blob $BlobName -Context $StorageContext -Force -ErrorAction Stop
+                Write-Verbose "Converted to PDF and uploaded to Azure Blob Storage!"
+            }
+            catch {
+                Write-Warning "Docker daemon is not running. Unable to convert to PDF"
+            }
+        }
     }
 }
 #endregion
